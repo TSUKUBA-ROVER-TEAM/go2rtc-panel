@@ -12,7 +12,7 @@ const DEFAULT_CONFIG: Config = {
   stream: "cam1",
 };
 
-function ExamplePanel({ context }: { context: PanelExtensionContext }) {
+function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
   const [config, setConfig] = useState<Config>(() => {
     const partialConfig = context.initialState as Partial<Config>;
     return { ...DEFAULT_CONFIG, ...partialConfig };
@@ -174,9 +174,9 @@ function ExamplePanel({ context }: { context: PanelExtensionContext }) {
   );
 }
 
-export function initExamplePanel(context: PanelExtensionContext): () => void {
+export function initGo2RTCPanel(context: PanelExtensionContext): () => void {
   const root = createRoot(context.panelElement);
-  root.render(<ExamplePanel context={context} />);
+  root.render(<Go2RTCPanel context={context} />);
 
   return () => {
     root.unmount();

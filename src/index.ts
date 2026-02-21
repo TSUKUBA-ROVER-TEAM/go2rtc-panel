@@ -1,9 +1,9 @@
 import { ExtensionContext } from "@foxglove/extension";
-import { initExamplePanel } from "./ExamplePanel";
+import { initGo2RTCPanel } from "./Go2RTCPanel";
 
 export function activate(extensionContext: ExtensionContext): void {
   extensionContext.registerPanel({
     name: "go2rtc-panel",
-    initPanel: initExamplePanel,
+    initPanel: initGo2RTCPanel,
   });
 }
