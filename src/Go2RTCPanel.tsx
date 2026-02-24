@@ -20,8 +20,11 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Disconnected");
+  const [reconnectCount, setReconnectCount] = useState(0);
+  const [latency, setLatency] = useState<number>(0);
 
   // Save config changes when config state updates
   useEffect(() => {
@@ -63,6 +66,43 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
     });
   }, [context, settingsTree]);
 
+  const triggerReconnect = () => {
+    if (reconnectTimeoutRef.current) return;
+    setStatus("Retrying in 2s...");
+    reconnectTimeoutRef.current = setTimeout(() => {
+      reconnectCountRef.current += 1; // Use ref to avoid closure issues in effect
+      setReconnectCount((c) => c + 1);
+      reconnectTimeoutRef.current = null;
+    }, 2000);
+  };
+
+  // Latency Killer & Monitor
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const interval = setInterval(() => {
+      if (video.paused || video.readyState < 3) return;
+
+      const buffered = video.buffered;
+      if (buffered.length > 0) {
+        const end = buffered.end(buffered.length - 1);
+        const diff = end - video.currentTime;
+        setLatency(diff);
+
+        // Latency Killer: If latency > 0.5s, skip to end
+        if (diff > 0.5) {
+          console.log(`Latency Killer: skipping from ${video.currentTime} to ${end}`);
+          video.currentTime = end;
+        }
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const reconnectCountRef = useRef(0);
+
   // WebRTC Setup
   useEffect(() => {
     async function setupWebRTC() {
@@ -92,9 +132,18 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
           }
         };
 
-        pc.oniceconnectionstatechange = () => {
-          setStatus(`ICE: ${pc.iceConnectionState}`);
+        const updateConnectionStatus = () => {
+          const iceState = pc.iceConnectionState;
+          const connState = pc.connectionState;
+          setStatus(`ICE: ${iceState} / CONN: ${connState}`);
+
+          if (iceState === "failed" || connState === "failed") {
+            triggerReconnect();
+          }
         };
+
+        pc.oniceconnectionstatechange = updateConnectionStatus;
+        pc.onconnectionstatechange = updateConnectionStatus;
 
         // Add transceivers for audio and video to receive
         pc.addTransceiver("video", { direction: "recvonly" });
@@ -104,7 +153,7 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
         await pc.setLocalDescription(offer);
 
         let endpoint = config.url;
-        if (endpoint.endsWith('/')) endpoint = endpoint.slice(0, -1);
+        if (endpoint.endsWith("/")) endpoint = endpoint.slice(0, -1);
 
         const response = await fetch(`${endpoint}/api/webrtc?src=${config.stream}`, {
           method: "POST",
@@ -122,18 +171,23 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
         console.error(err);
         setError(err instanceof Error ? err.message : String(err));
         setStatus("Error");
+        triggerReconnect();
       }
     }
 
     setupWebRTC();
 
     return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (pcRef.current) {
         pcRef.current.close();
         pcRef.current = null;
       }
     };
-  }, [config.url, config.stream]);
+  }, [config.url, config.stream, reconnectCount]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", backgroundColor: "#000", overflow: "hidden" }}>
@@ -144,29 +198,56 @@ function Go2RTCPanel({ context }: { context: PanelExtensionContext }) {
         muted
         style={{ width: "100%", height: "100%", objectFit: "contain" }}
       />
-      <div style={{
-        position: "absolute",
-        top: 8,
-        left: 8,
-        color: "#fff",
-        background: "rgba(0,0,0,0.5)",
-        padding: "2px 6px",
-        borderRadius: 4,
-        fontSize: "12px",
-        pointerEvents: "none",
-        zIndex: 10
-      }}>
-        {status} {error && ` - Error: ${error}`}
+      <div
+        style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          color: "#fff",
+          background: "rgba(0,0,0,0.5)",
+          padding: "4px 8px",
+          borderRadius: 4,
+          fontSize: "12px",
+          zIndex: 10,
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          pointerEvents: "auto",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span>{status}</span>
+          <span style={{ color: latency > 0.5 ? "#ffaa00" : "#aaffaa", fontSize: "10px" }}>
+            Delay: {latency.toFixed(2)}s
+          </span>
+          <button
+            onClick={() => setReconnectCount((c) => c + 1)}
+            style={{
+              background: "#444",
+              border: "none",
+              color: "#fff",
+              padding: "2px 6px",
+              borderRadius: 2,
+              cursor: "pointer",
+              fontSize: "10px",
+            }}
+          >
+            Reconnect
+          </button>
+        </div>
+        {error && <div style={{ color: "#ff8888", maxWidth: "200px" }}>Error: {error}</div>}
       </div>
       {!config.url && (
-        <div style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          color: "#aaa",
-          textAlign: "center"
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            color: "#aaa",
+            textAlign: "center",
+          }}
+        >
           Please configure go2rtc URL and Stream in panel settings.
         </div>
       )}
